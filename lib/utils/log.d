@@ -1,43 +1,9 @@
-module kiwi.utils.log;
+module utils.log;
 
 import std.stdio;
 import std.string;
 
-/**
- * Constants providing the character sequences to add colors in a terminal.
- */ 
-version(Posix)
-{
-    enum{ RESET       = "\033[0m"
-        , BOLD        = "\033[1m"
-        , ITALIC      = "\033[3m"
-        , UNDERLINED  = "\033[4m"
-        , BLUE        = "\033[34m"
-        , LIGHTBLUE   = "\033[1;34m"
-        , GREEN       = "\033[1;32m"
-        , LIGHTGREEN  = "\033[1;32m"
-        , RED         = "\033[31m"
-        , LIGHTRED    = "\033[1;31m"
-        , GREY        = "\033[1;30m"
-        , PURPLE      = "\033[1;35m"
-    };
-}
-version(Win32)
-{
-    enum{ RESET       = ""
-        , BOLD        = ""
-        , ITALIC      = ""
-        , UNDERLINED  = ""
-        , BLUE        = ""
-        , LIGHTBLUE   = ""
-        , GREEN       = ""
-        , LIGHTGREEN  = ""
-        , RED         = ""
-        , LIGHTRED    = ""
-        , GREY        = ""
-        , PURPLE      = ""
-    };    
-}
+import utils.termcolors;
 
 /**
  * The log targets

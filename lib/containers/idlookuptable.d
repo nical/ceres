@@ -9,390 +9,267 @@ debug { import std.stdio; }
   ID lookup table.
 
   This container provides access to its elements through handles.
-  The handle type is a template parameter that must alias Index and ServiceID types and have index and ServiceID properties, 
+  The handle type is a template parameter that must alias an Index type and have an index property, 
   For example:
 
     struct Handle
     {
       alias ushort Index;
-      alias ushort ServiceID;
       Index index;
-      ServiceID service;
     }
 */
 struct IDLookupTable(T,THandle) 
 {
 
-  alias THandle Handle;
-  alias Handle.Index Index;
-  alias Handle.ServiceID ServiceID;
-  
-  this (ServiceID service) {
-    _serviceID = service;
-  }
+    alias THandle Handle;
+    alias Handle.Index Index;
+    alias _InternalData!(T,Index) InternalData;
 
-
-  /**
-  Returns true if there is an element for this handle in the container.
-  */
-  bool contains(Handle h) const {
-    if (h.service!=_serviceID 
-        || h.index==0 
-        || h.index>=_ids.length) {
-      return false;
-    }
-    Index it = firstFreeHandle;
-    while (it != 0) {
-      if (it == h.index) {
-        return false;
-      }
-      it = _ids[it];
-    }
-    return true;
-  }
-
-  /**
-  Access an element using its handle.
-
-  The reference to the element should not be kept because elements can be moves in the container.
-  */
-  inout(T)* get(Handle h) inout {
-    if(!contains(h)) return null;
-    return &_objects[_ids[h.index]].object;
-  }
-
-  /**
-  Access an element using its handle.
-
-  The reference to the element should not be kept because elements can be moves in the container.
-  */
-  ref inout(T) opIndex(Handle h) inout {
-    assert(h.service == _serviceID);
-    return _objects[_ids[h.index]].object;
-  }
-
-  @property {
-
-    /**
-    Returns the number of elements in the container.
-    */
-    Index length() const {
-      return cast(Index) _objects.length;
-    }
-
-    /**
-    Optional callback function invoked on every removal.
-    */
-    ref auto onRemove() {
-      return _rmCallback;
-    }
-
-
-    ServiceID serviceID() const {
-      return _serviceID;
-    }
-
-  } // properties
-
-  /**
-  Adds a copy of the element passed in parameter and returns a handle to access it.
-  */
-  Handle add(T obj) {
-    Handle res = add();
-    *get(res) = obj;
-    return res;
-  }
-
-  /**
-  Adds an empty element to the container and returns a handle to access it;
-  */
-  Handle add() 
-  out(h) {
-    assert(_objects[_ids[h.index]].handle == h.index);
-  } body {
-    if (firstFreeHandle==0) {
-      Index res = cast(Index)_ids.length;
-      _ids ~= cast(Index)_objects.length;
-      _objects.length = _objects.length+1;
-      _objects[$-1].handle = res; 
-      return createHandle(res);
-    }
-
-    Index temp = _ids[firstFreeHandle];
-    Index result = firstFreeHandle; 
-    
-    _ids[result] = cast(Index)_objects.length;
-    
-    _objects.length = _objects.length+1;
-    _objects[$-1].handle = result; 
-    
-    _ids[FREE_LIST] = temp;
-
-    return createHandle(result);
-  }
-
-  /**
-  Removes an element from the conatianer.
-
-  Removing an element can reorganize the objects within the container, 
-  so one should never keep pointers or references to to an element from 
-  prior to a call to remove. 
-  */
-  void remove(Handle h) {
-    assert(contains(h));
-    
-    // idx of the object to remove
-    Index idx = _ids[h.index];
-    if(_rmCallback) _rmCallback(_objects[idx].object);
-    
-    // set free list
-    _ids[h.index] = firstFreeHandle;
-    _ids[FREE_LIST] = h.index;
-    // move last object to keep the object list continguous
-    _objects[idx] = _objects[$-1];
-
-    // fix the index at the handle pointing to the just moved object
-    if(_objects.length > 1) {
-       _ids[_objects[idx].handle] = idx;
-    }
-
-    _objects.length -= 1;
-  }
-
-  /**
-  Clears the container after calling onRemove callback on each element. 
-  */
-  void removeAll() {
-    if (_rmCallback) {
-      foreach(ref obj;_objects) {
-        _rmCallback(obj.object);
-      }
-    }
-
-    _objects.length = 0;
-    _ids = [0];
-  }
-  
-  /**
-  Debug facility
-  */
-  void dumpIds() const {
-    debug {
-      Index[] freeIds = [0];
-      
-      for (Index it = _ids[0]; it!=0; it=_ids[it]) {
-        freeIds ~= it;
-      }
-    
-      write("[");
-      //writeln(_ids);
-      foreach(uint i,Index handle; _ids) {
-        bool found = false;
-        foreach(freeId;freeIds) {
-          if(i==freeId)
-            found = true;
+    @property {
+        Index length() const pure {
+            return _length;
         }
-        if(!found) {
-          write(_ids[i], " ");
-        } else {
-          write("\033[1;33m",_ids[i], "\033[0m ");
+        Index maxLength() const pure {
+            return cast(Index) _data.length;
         }
-      }
-      writeln("]");   
-    } // debug
-  }
-  /**
-  Debug facility
-  */
-  void dumpObjects() const {
-    debug {
-      //
+        bool empty() const pure {
+            return _length == 0;
+        }
+        inout(InternalData[]) elements() inout pure {
+            return _data[0.._length];
+        }
     }
-  }
+    
+    Handle add(T toCopy) pure {
+        Index temp = _indices[_freeList].nextFreeIndex;
+        Index newIdx = _freeList;
+        // 
+        _indices[newIdx].index = _length;
+        // add object at the end of the data array
+        _data[_length].data = toCopy;
+        _data[_length].id   = newIdx;
+        // update free list
+        _freeList = cast(Index) (temp==0?_length+1:temp);
+        // update length
+        _length++;
+        // create and return handle
+        Handle result;
+        result.index = cast(Index) (_offset + newIdx);
+        return result;
+    }
 
-  /**
-  Debug facility
-  */
-  void dump() const {
-    debug {
-      write("|  ids: ");
-      dumpIds();
-      //write("|  objects: ");
-      //dumpObjects();
+    Handle addEmpty() pure {
+        return add(T.init);
     }
-  }
+    
+    bool remove(Handle handle) pure {
+        if (!contains(handle)) return false;
+        // local index of the removed object  
+        Index idx = cast(Index) (handle.index - _offset);
+        // move last element to replace the remived data
+        _data[idx].data = _data[_length-1].data;
+        _data[idx].id   = _data[_length-1].id;
+        // update the index of the moved object
+        _indices[_data[_length-1].id].index = idx;
+        // clear the removed data 
+        debug _data[_length-1].data = T.init;
+        debug _data[_length-1].id   = 0;
+        // add index of the removed object to free list
+        _indices[idx].nextFreeIndex = _freeList;
+        _freeList = idx;
+        // reduce length
+        _length -= 1;
+        return true;
+    }
+
+    bool contains(Handle handle) pure {
+        //debug{writeln("contains ", handle, " ?");}
+        Index idx = cast(Index) (handle.index - _offset);
+        if ((idx >= maxLength)||(handle.index < _offset)) {
+            return false;
+        }
+        if (_data[_indices[idx].index].id!=idx) return false;
+
+        Index it = _freeList;
+        while (it != 0) {
+            //debug writeln("-- ",it);
+            if (it == idx) {
+                return false;
+            }
+            it = _indices[it].nextFreeIndex;
+        }
+        return true;
+    }
+
+    T* get(Handle handle) pure {
+        if (!contains(handle)) return null;
+        return &_data[_indices[handle.index-_offset].index].data;
+    }
+
+    ref T opIndex(Handle handle) pure {
+        auto res = get(handle);
+        assert(res !is null);
+        return *res;
+    }
+
+    void allocate(Index maxLen, Index indexOffset=1) pure {
+        _indices.length = maxLen;
+        _data.length = maxLen;
+        _offset = indexOffset;
+        _freeList = 0;
+    }
 
 private:
-  enum { FREE_LIST=0 };
-  struct T_handle {
-    Index handle;
-    T object;
-  }
+    
+    InternalIndex!Index[]   _indices;
+    InternalData[]    _data;
+    Index   _offset;
+    Index   _freeList;
+    Index   _length;
+} // IDLookupTable
 
-  /**
-  Creates a handle from an index.
-  Intended for internal use mostly
-  */
-  Handle createHandle(Index index) {
-    return Handle(index, _serviceID);
-  }
+private struct InternalIndex(Index)
+{
+    union {
+        Index nextFreeIndex;
+        Index index;
+    };
+}
 
+private struct _InternalData(T,IndexT)
+{
+    T       data;
+    IndexT  id;
+}
 
-  @property ushort firstFreeHandle() const { return _ids[0]; }
+void _dump(T)(ref T table) {
+    writeln("freeList: ", table._freeList);
+    write("indices: [");
+    foreach (elt;table._indices) {
+        write(" ", elt.index);
+    }
+    writeln(" ]");
 
-  Handle.Index[]        _ids = [0];
-  T_handle[]            _objects;
-  void function(ref T)  _rmCallback = null;
-  Handle.ServiceID      _serviceID;
+    write("data: [");
+    foreach (elt;table._data) {
+        write(" (", elt.id,")",elt.data);
+    }
+    writeln("]");
+    writeln();
+}
 
-}// IDLookupTable
+unittest {
+    struct Handle {
+        alias ubyte Index;
+        Index index;
+    }
 
+    IDLookupTable!(string,Handle) table;
 
+    assert(table.length==0);
+    assert(table.maxLength==0);
 
+    table.allocate(10,1);
+
+    table._dump();
+
+    assert(table.length==0);
+    assert(table.maxLength==10);
+
+    auto foo = table.add("foo");
+    table._dump();
+
+    auto bar = table.add("bar");
+    table._dump();
+    writeln("foo:",foo);
+    writeln("bar:",bar);
+    
+    assert(table.length==2);
+    assert(table.maxLength==10);
+    assert(table.contains(foo));
+    assert(table.contains(bar));
+
+    assert(table[foo]=="foo");
+    assert(table[bar]=="bar");
+
+    Handle h0 = {0};
+    Handle h5 = {5};
+
+    assert(!table.contains(h0));
+    assert(!table.contains(h5));
+    
+    table._dump();
+
+    writeln("add baz");
+    auto baz = table.add("baz");
+    assert(table.contains(baz));
+
+    table._dump();
+    writeln("remove bar");    
+    assert(table.remove(bar));
+
+    table._dump();
+
+    assert(table.contains(foo));
+    assert(table.contains(baz));
+    assert(!table.contains(bar));
+    assert(table.length==2);
+
+    table._dump();
+    writeln("add plop");
+    auto plop = table.add("plop");
+
+    table._dump();
+
+    assert(table.contains(foo));
+    assert(table.contains(baz));
+    assert(table.contains(plop));
+
+    assert(table.length==3);
+
+    auto a = table.add("a");
+    auto b = table.add("b");
+    auto c = table.add("c");
+    auto d = table.add("d");
+
+    assert(table.contains(a));
+    assert(table.contains(b));
+    assert(table.contains(c));
+    assert(table.contains(d));
+
+    assert(table.length==7);
+
+    assert(table.remove(b));
+    assert(table.remove(c));
+
+    assert(table.contains(a));
+    assert(!table.contains(b));
+    assert(!table.contains(c));
+    assert(table.contains(d));
+
+    assert(table.length==5);
+
+    assert(table[a]=="a");
+    assert(table[d]=="d");
+    assert(table[foo]=="foo");
+    assert(table[baz]=="baz");
+    assert(table[plop]=="plop");
+
+    int eltCount = 0;
+    foreach (elt;table.elements) {
+        assert( elt.data == "a"
+             || elt.data == "d"
+             || elt.data == "foo"
+             || elt.data == "baz"
+             || elt.data == "plop"
+        );
+        ++eltCount;
+    }
+    assert(eltCount==table.length);
+}
 
 
 
 // ----------------------------------------------------------------------------------
 
-
-
-
-unittest {
-  import std.stdio;
-
-  struct Handle
-  {
-    alias ushort Index;
-    alias ushort ServiceID;
-    Index index;
-    ServiceID service;
-  }
-
-
-  writeln("containers.lookuptable.unittest");
-
-  IDLookupTable!(string,Handle) table;
-
-  table.onRemove = function void (ref string s) {
-    writeln("cb: removing ", s);
-  };
-
-  assert(table.length==0);
-  auto foo = table.add("foo");
-
-  table.dump();
-
-  assert(table.length==1);
-  assert(foo.index==1);
-  assert(table[foo] == "foo");
-  foreach(i ; 0..10) {
-    if ( i!=foo.index) {
-      assert(!table.contains(table.createHandle(cast(ushort)i)));
-    }
-  }
-
-  auto bar = table.add("bar");
-  table.dump();
-  auto baz = table.add("baz");
-  table.dump();
-  auto plop = table.add("plop");
-
-  foreach(i ; 0..10) {
-    if (i!=foo.index 
-        && i!=bar.index 
-        && i!=baz.index 
-        && i!=plop.index) {
-      assert(!table.contains(table.createHandle(cast(ushort)i)));
-    }
-  }
-
-  assert(table[foo]  == "foo");
-  assert(table[bar]  == "bar");
-  assert(table[baz]  == "baz");
-  assert(table[plop] == "plop");
-
-  assert(table.length == 4);
-
-  table.dump();
-
-
-  writeln("foo=",foo," baz=",baz," plop=",plop);
-  writeln("remove bar");
-  table.remove(bar);
-
-  table.dump();
-  writeln("foo=",foo," baz=",baz," plop=",plop);
-
-  assert(table[foo]  == "foo");
-  assert(table[baz]  == "baz");
-  assert(table[plop] == "plop");
-
-  assert(table.length == 3);
-
-  writeln("rm plop");
-  table.remove(plop);
-
-  writeln("----");
-  table.dump();
-
-  assert(table[foo]  == "foo");
-  assert(table[baz]  == "baz");
-  
-  auto hi = table.add("hi");
-
-  table.dump();
-  
-  assert(table[foo]  == "foo");
-  assert(table[baz]  == "baz");
-  assert(table[hi]   == "hi");
-  
-  assert(table.contains(foo));
-  assert(table.contains(baz));
-  assert(table.contains(hi));
-
-  writeln("rm ALL THE THINGS!");
-  table.remove(hi);
-  table.dump;
-  table.remove(foo);
-  table.dump;
-  table.remove(baz);
-
-  assert(table.length==0);
-
-  table.dump;
-
-  writeln("add new stuff");
-  
-  auto a = table.add("A");
-  auto b = table.add("B");
-  auto c = table.add("C");
-  auto d = table.add("D");
-  auto e = table.add("E");
-  auto f = table.add("F");
-
-  table.dump();
-
-  assert(table.contains(a));
-  assert(table.contains(b));
-  assert(table.contains(c));
-  assert(table.contains(d));
-  assert(table.contains(e));
-  assert(table.contains(f));  
-
-  assert(table[a]=="A");
-  assert(table[b]=="B");
-  assert(table[c]=="C");
-  assert(table[d]=="D");
-  assert(table[e]=="E");
-  assert(table[f]=="F");
-
-  assert(table.length==6);
-
-  table.removeAll();
-
-  assert(table.length==0);
-
-  writeln("..done");
-
-}
 

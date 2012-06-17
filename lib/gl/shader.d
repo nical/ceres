@@ -1,26 +1,26 @@
-module ui.gl.shader;
+module gl.shader;
 
 import std.stdio;
-import derelict.opengl.gl;
+import gl.opengl;
 import gl3n.linalg;
 
-import ui.gl.shaderlexer;
-import ui.gl.utils;
+import gl.shaderlexer;
+import gl.utils;
+import gl.texture;
 
+debug {
+import utils.termcolors;
+}
 enum { INVALID_SHADER_ID = 0xFFFFFF }
 
 GLchar[] LoadtextFile(string path)
 {
-    writeln("load shader file");
     auto file = File(path,"r");
     GLchar[] src;
     GLchar[] line;
     while (file.readln(line)) {
         src ~= line;
     }
-    write(src);
-
-    writeln("..done");
     return src;    
 }
 
@@ -31,6 +31,7 @@ Shader CreateShaderFromFile(string path, GLuint shaderType)
     Shader shader;
     shader.create(shaderType);
     shader.setSource(src);
+    writeln("   uniforms: ", shader._uniforms);
     assert(shader.compile());
     assert(glGetError()==GL_NO_ERROR);
     return shader;
@@ -43,7 +44,7 @@ string getShaderErrorLog(GLuint shaderId)
     return errlog;
 }
 
-Program CreateProgarmFromFiles(string vsPath, string fsPath)
+Program CreateProgramFromFiles(string vsPath, string fsPath)
 {
     assert(glGetError()==GL_NO_ERROR);
 
@@ -78,12 +79,12 @@ struct Shader
         assert(isCreated);
         GLchar* src0 = src.ptr;
         glShaderSource(_id, 1, &src0, null );
-        _uniforms = FindUniforms(src);
-        writeln("uniforms: ", _uniforms);
+        _uniforms = Shader.FindUniforms(src);
     }
 
     static string[] FindUniforms(GLchar[] src) {
         string[] uniforms;
+        string[] attributes;
         string token;
         auto lexer = ShaderLexer(src.idup);
         while (lexer.tokenize(token)) {
@@ -91,6 +92,10 @@ struct Shader
                 lexer.tokenize(token);
                 lexer.tokenize(token);
                 uniforms ~= token;
+            } else if (token=="attribute") {
+                lexer.tokenize(token);
+                lexer.tokenize(token);
+                attributes ~= token;
             }
         }
         return uniforms;
@@ -98,7 +103,6 @@ struct Shader
 
     bool compile() {
         assert(isCreated);
-        debug{writeln("compiling shader ", _id);}
         glCompileShader(_id);
 
         GLchar[512] buf;
@@ -118,6 +122,7 @@ struct Shader
     GLuint _id;
     GLuint _type; 
     string[] _uniforms;
+    string[] _atributes;
 }
 
 struct Program
@@ -182,6 +187,11 @@ struct Program
             if (l._name == name)
                 return cast(inout(ShaderLocation)*) &l; 
         }
+        debug {
+            writeln(RED, "Warning: ", RESET, "this shader doesn't have a uniform named '", name,"'");
+            writeln(" available uniforms :");
+            foreach(ref l; _uniforms) writeln("  * '",l._name,"'");
+        }  
         return null;
     }
     inout(ShaderLocation)* opIndex(string name) inout {
@@ -208,9 +218,17 @@ struct ShaderLocation {
     }
     enum {UNIFORM, ATTRIBUTE};
 
-    int _type;
-    GLint _location;
-    string _name;
+    @property {
+        GLint location() const pure { 
+            return _location; 
+        }
+        auto name() const pure { 
+            return _name; 
+        }
+        int type() const pure {
+            return _type;
+        }
+    } // properties
 
     void set(float val) {
         glUniform1f(_location, val);
@@ -236,11 +254,26 @@ struct ShaderLocation {
     void set(mat4 m) {
         glUniformMatrix4fv(_location, 1, GL_TRUE, m.value_ptr);
     }
+    void set(ref Texture tex) {
+        AssertNoGLError();
+        glActiveTexture(tex.activeTextureEnum);
+        AssertNoGLError();
+        tex.bind();
+        AssertNoGLError();
+        glUniform1i(_location, tex.activeTextureInt);
+        //writeln("activeTextureInt:",tex.activeTextureInt);
+        AssertNoGLError();
+    }
+
+private:
+    int _type;
+    GLint _location;
+    string _name;
+
 }
 
-//shader.location("color").uniform(r,g,b);
-//shader["color"].set(r,g,b);
-//shader.uniform("color").set(r,g,b);
-//shader.uniform(2).set(r,g,b);
-//shader.uniform("color", r,g,b);
 
+private GLuint[string] _standardAttributeLocations;
+
+// usage:
+//   shader["color"].set(r,g,b);

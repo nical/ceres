@@ -1,4 +1,4 @@
-module utils.termcolor;
+module utils.termcolors;
 
 version(Posix) {
     enum{ RESET         = "\033[0m"

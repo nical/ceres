@@ -1,8 +1,12 @@
-module ui.gl.shaderlexer;
+module gl.shaderlexer;
 
 import std.stdio;
 import std.array;
 import std.ascii;
+
+debug {
+import utils.termcolors;
+}
 
 struct ShaderLexer {
     this(string source) {
@@ -15,7 +19,6 @@ struct ShaderLexer {
     bool tokenize(out string token, LexerFlags flags=SKIP_EOL) {
         string result = "";
         while (true) {
-            writeln(RED, "#", GREY, src, RESET);
             skipWhite(flags);
             if (!empty && front=='\n') {
                 token="\n";
@@ -137,6 +140,30 @@ struct ShaderLexer {
     string src;
 }
 
+struct ShaderInput
+{
+    string name;
+    string type;
+}
+
+void ParseShaderInputs(char[] src, ref ShaderInput[] attributes, ref ShaderInput[] uniforms) {
+    string token;
+    auto lexer = ShaderLexer(src.idup);
+    while (lexer.tokenize(token)) {
+        if (token=="uniform") {
+            ShaderInput si;
+            lexer.tokenize(si.type);
+            lexer.tokenize(si.name);
+            uniforms ~= si;
+        } else if (token=="attribute") {
+            ShaderInput si;
+            lexer.tokenize(si.type);
+            lexer.tokenize(si.name);
+            attributes ~= si;
+        }
+    }
+}
+
 unittest {
     auto lexer1 = ShaderLexer("#version 120\nuniform float   hello_world;\n// the program\n\nvoid main(/*void*/){\nreturn;}\n\n");
     auto lexer2 = ShaderLexer("foo=(a.x+1)/i++;--bar");
@@ -146,48 +173,16 @@ unittest {
     string token;
     while (lexer1.tokenize(token)) {
         assert(++i < 100);
-        writeln(token);
+        //writeln(token);
     }
     i = 0;    
     while (lexer2.tokenize(token)) {
         assert(++i < 100);
-        writeln(token);
+        //writeln(token);
     }
     i = 0;
     while (lexer3.tokenize(token)) {
         assert(++i < 100);
-        writeln(token);
+        //writeln(token);
     }
-}
-
-
-version(Posix)
-{
-    enum{ RESET = "\033[0m"
-        , BOLD = "\033[1m"
-        , ITALIC = "\033[3m"
-        , UNDERLINED = "\033[4m"
-        , BLUE = "\033[34m"
-        , LIGHTBLUE = "\033[1;34m"
-        , GREEN = "\033[1;32m"
-        , LIGHTGREEN = "\033[1;32m"
-        , RED = "\033[31m"
-        , LIGHTRED = "\033[1;31m"
-        , GREY = "\033[1;30m"
-        , PURPLE = "\033[1;35m"
-    };
-} else {
-    enum{ RESET = ""
-        , BOLD = ""
-        , ITALIC = ""
-        , UNDERLINED = ""
-        , BLUE = ""
-        , LIGHTBLUE = ""
-        , GREEN = ""
-        , LIGHTGREEN = ""
-        , RED = ""
-        , LIGHTRED = ""
-        , GREY = ""
-        , PURPLE = ""
-    };
 }

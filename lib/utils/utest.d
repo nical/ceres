@@ -1,6 +1,7 @@
-module kiwi.utils.testing;
+module utils.utest;
 
-import kiwi.utils.log;
+import utils.log;
+import utils.termcolors;;
 
 
 
@@ -20,7 +21,7 @@ struct TestSuite
     
     this( string n )
     {
-        _log = kiwi.core.commons.log;
+        //_log = kiwi.core.commons.log;
         _name = n;
         _log.writeln( LIGHTBLUE, "[Begin test] ", RESET, BOLD, _name );
         _log.indentation++;
