@@ -6,6 +6,7 @@ import std.array;
 import std.ascii;
 import std.variant;
 import std.exception;
+import std.conv;
 
 debug {
     import std.stdio;
@@ -61,6 +62,14 @@ template TokenCode(string s) {
 }
 
 class JSONLexerException : Exception
+{
+    this(string msg)
+    {
+        super(msg);
+    }
+}
+
+class JSONParserException : Exception
 {
     this(string msg)
     {
@@ -208,34 +217,37 @@ struct JSONParser(Source)
         }
 
         lexer.tokenize(token);
-        writeln(GREEN, token.toString(), RESET);
 
         if (onToken) onToken(state, token);
 
         if (token.isCode(TokenType.BEGIN_OBJECT)) {
-            assert(expecting&TokenType.VALUE);
-            state.push(JSONContext(JSONParserContextType.OBJECT,currentName));
+            EnsureExpectingTokenType(TokenType.VALUE);
+            state.push(JSONContext(JSONParserContextType.OBJECT
+                                 , currentIndex
+                                 , currentName));
             if (onBeginObject) onBeginObject(state);
             expecting = TokenType.NAME
                       | TokenType.END_OBJECT;
             currentIndex = 0;
         
         } else if (token.isCode(TokenType.END_OBJECT)) {
-            assert(expecting&TokenType.END_OBJECT);
+            EnsureExpectingTokenType(TokenType.END_OBJECT);
             string name = state.name;
             if (onEndObject) onEndObject(state);
-            state.pop(); 
-            if (state.depth > 0) {
+            currentIndex = state.index;
+            state.pop();
+            if (state.stackDepth > 0) {
                 expecting = TokenType.COMMA | state.contextEndCode;
-                currentIndex = state.index;
             } else {
                 // should be the last token
                 expecting = TokenType.NULL;
             }
         
         } else if (token.isCode(TokenType.BEGIN_ARRAY)) {
-            assert(expecting&TokenType.VALUE);
-            state.push(JSONContext(JSONParserContextType.ARRAY,currentName));
+            EnsureExpectingTokenType(TokenType.VALUE);
+            state.push(JSONContext(JSONParserContextType.ARRAY
+                                 , currentIndex
+                                 , currentName));
             if(onBeginArray) onBeginArray(state);
             currentName = null;
             currentIndex = 0;
@@ -245,25 +257,25 @@ struct JSONParser(Source)
                       | TokenType.END_ARRAY;
         
         } else if (token.isCode(TokenType.END_ARRAY)) {
-            assert(expecting&TokenType.END_ARRAY);
+            EnsureExpectingTokenType(TokenType.END_ARRAY);
             string name = state.name;
+            if (onEndArray) onEndArray(state);
+            currentIndex = state.index;
             state.pop();
-            if (onEndObject) onEndArray(state);
-            if (state.depth > 0) {
+            if (state.stackDepth > 0) {
                 expecting = TokenType.COMMA | state.contextEndCode;
-                currentIndex = state.index;
             } else {
                 expecting = TokenType.NULL; // should be the last token
             }
 
         } else if (token.isCode(TokenType.COLON)) {
-            assert(expecting & TokenType.COLON);
+            EnsureExpectingTokenType(TokenType.COLON);
             expecting = TokenType.VALUE;
 
         } else if (token.isCode(TokenType.COMMA)) {
-            assert(expecting & TokenType.COMMA);
-            expecting = (state.inObject ? TokenType.NAME : TokenType.NULL)
-                      | (state.inArray ? TokenType.VALUE : TokenType.NULL);
+            EnsureExpectingTokenType(TokenType.COMMA);
+            expecting = (state.isObject ? TokenType.NAME : TokenType.NULL)
+                      | (state.isArray ? TokenType.VALUE : TokenType.NULL);
             ++currentIndex;          
 
         } else {
@@ -285,13 +297,24 @@ struct JSONParser(Source)
         return true;
     }
 
+    void EnsureExpectingTokenType(int line = __LINE__)(TokenType type) 
+    {
+        if (!(expecting & type)) {
+            throw new JSONParserException("\nparser/json.d("~
+                to!string(line)~"): expected token type "~to!string(expecting)
+                ~" got "~to!string(type)
+            );
+        }
+    }
+
+
     Source src;
     JSONLexer lexer;
     
     alias void delegate(JSONParserState state) Callback;
     alias void delegate(JSONParserState state, string name) CallbackString;
     alias void delegate(JSONParserState state, Token tok) CallbackToken;
-
+    
     CallbackToken onToken;
     CallbackString onName;
     CallbackString onBasicValue;
@@ -313,7 +336,7 @@ struct JSONParserState
     @property {
         JSONParserState parent() {
             assert(hasParent);
-            return JSONParserState(stack[0..$-2]);
+            return JSONParserState(stack[0..$-1]);
         }
         bool hasParent() const {
             return stack.length>1;
@@ -327,17 +350,32 @@ struct JSONParserState
         ref Variant userData() {
             return stack[$-1].userData;
         }
-        bool inObject() const {
+        bool isObject() const {
             return stack[$-1].type==JSONParserContextType.OBJECT;
         }
-        bool inArray() const {
+        bool isArray() const {
             return stack[$-1].type==JSONParserContextType.ARRAY;
         }
-        bool inBase() const {
+        bool isBase() const {
             return stack[$-1].type==JSONParserContextType.BASE;
         }
-        uint depth() const {
+        uint stackDepth() const {
             return cast(uint) stack.length;
+        }
+        string toString() {
+            if (stack.length==1) return ".";
+            string result;
+            JSONParserState s = this;
+            ubyte lastType = JSONParserContextType.BASE;
+            foreach (ref elt; stack) {
+                if (lastType == JSONParserContextType.ARRAY) {
+                    result ~= "." ~ to!string(elt.index);
+                } else if (lastType == JSONParserContextType.OBJECT) {
+                    result ~= "." ~ elt.name;
+                }
+                lastType = elt.type;
+            }
+            return result;
         }
     }
 
@@ -359,6 +397,13 @@ private:
 
 struct JSONContext
 {
+    this(ubyte aType, uint aIndex, string aName)
+    {
+        type = aType;
+        index = aIndex;
+        name = aName;
+    }
+
     ubyte  type;
     string name;
     uint   index;
@@ -419,51 +464,43 @@ unittest {
     AssertTokenCode(l3,TokenCode!"}");
     AssertTokenCode(l3,TokenCode!"}");
 
-    string src_a = "{foo:{bar:42,plop:[1,2,3]},baz:false}";
+    string src_a = "{foo:{bar:42,plop:[[{}],[2],3]},baz:false}";
     auto p1 = JSONParser!string(src_a);
     string src_b;
-   
-    p1.onToken = (JSONParserState, Token token){
+
+    p1.onToken = (JSONParserState, Token token) {
         if (token.isCode(TokenCode!",")) {
             src_b ~= ",";
-            write(",");
         }
         else if (token.isCode(TokenCode!":")) {
             src_b ~= ":";
-            write(":");
         }
     };
     bool dbgprint = false;
 
-    p1.onBeginArray = (JSONParserState state){
-        if (dbgprint) write(YELLOW,"[",RESET);
-        src_b~='[';
+    p1.onBeginArray = (JSONParserState state) {
+        writeln("onBeginArray ", state.toString);
     };
 
-    p1.onEndArray = (JSONParserState state){
-        if (dbgprint) write(YELLOW,"]",RESET);
-        src_b~=']';
+    p1.onEndArray = (JSONParserState state) {
+        writeln("onEndArray ", state.toString);
     };
-    
-    p1.onBeginObject = (JSONParserState state){
-        if (dbgprint) write(GREEN,"{",RESET);
-        src_b~='{';
+
+    p1.onBeginObject = (JSONParserState state) {
+        writeln("onBeginObject ", state.toString);
     };
 
     p1.onEndObject = (JSONParserState state){
-        if (dbgprint) write(GREEN,"}",RESET);
-        src_b~='}';
+        writeln("onEndObject ", state.toString);
     };
-    
+
     p1.onBasicValue = (JSONParserState,string name){
-        if (dbgprint) write(RED,name,RESET);
-        //src_b~=name;
+
     };
 
     writeln(BLUE, p1.src, RESET);
     while (p1.advance()) {}
     writeln();
-    //assert(src_a==src_b);
 
     writeln(" -- parser.json.unittest done.");
 }
@@ -494,31 +531,3 @@ unittest {
         }
     };
 }
-
-/+
-
-onBeginArray: {
-    if (context.inObject && context.name=="indices")
-    auto layer = context.parent.userData.get!LevelLevel();
-    if (layer.width*layer.height > 0) {
-        layer.indices = new int[layer.width*layer.height];
-        layer.preAllocatedIndices = true;
-    } else {
-        layer.preAllocatedIndices = false;
-    }
-}
-
-onBeginObject: {
-    if (context.inArray 
-        && context.parent.inObject
-        && context.parent.name=="layers") {
-        auto layers = context.parent.userData.get!(Layer[])();
-        auto l = new Layer;
-        layers ~= l;
-        context.userData = l;
-    }
-}
-
-
-
-+/
